@@ -4,6 +4,37 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+.venv/
+venv/
+env/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE/Editor
+.DS_Store
+.idea/
+.vscode/
+*.code-workspace
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
 *.egg-info/
 dist/
 build/

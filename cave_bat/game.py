@@ -1,9 +1,10 @@
+"""Game loop, scene management, and rendering composition for Cave Bat."""
+
 from __future__ import annotations
 
 import math
 import random
 import sys
-from typing import List, Tuple
 
 import pygame
 
@@ -16,8 +17,8 @@ from .config import (
     COL_LAYER_2,
     COL_LAYER_3,
     FPS,
-    MAX_GAP,
     MARGIN_TOP_BOTTOM,
+    MAX_GAP,
     MIN_GAP,
     OBSTACLE_SPACING,
     OBSTACLE_WIDTH,
@@ -30,6 +31,8 @@ from .utils import circle_polygon_collision
 
 
 class Game:
+    """Top-level game controller: manages state, input, update, and draw."""
+
     def __init__(self) -> None:
         pygame.init()
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -39,7 +42,7 @@ class Game:
         self.font_small = pygame.font.SysFont(None, 28)
         self._make_overlays()
         self._build_parallax()
-        self.drops: List[WaterDrop] = []
+        self.drops: list[WaterDrop] = []
 
         self.reset()
 
@@ -57,7 +60,7 @@ class Game:
         self.vignette = pygame.transform.smoothscale(s, (WINDOW_WIDTH, WINDOW_HEIGHT))
 
         # Dust particles
-        self.particles: List[Particle] = [Particle() for _ in range(28)]
+        self.particles: list[Particle] = [Particle() for _ in range(28)]
 
     def _build_parallax(self) -> None:
         # Describe layered ridge parameters for runtime generation (continuous silhouettes)
@@ -76,7 +79,7 @@ class Game:
 
     def reset(self) -> None:
         self.bat = Bat(BAT_X, WINDOW_HEIGHT // 2)
-        self.obstacles: List[Obstacle] = []
+        self.obstacles: list[Obstacle] = []
         self.spawn_timer = 0.0
         self.score = 0
         self.best = 0
@@ -124,7 +127,7 @@ class Game:
             if self.bat.y - BAT_BODY_RADIUS <= 0 or self.bat.y + BAT_BODY_RADIUS >= WINDOW_HEIGHT:
                 self.trigger_game_over()
         # Update water drops
-        alive_drops: List[WaterDrop] = []
+        alive_drops: list[WaterDrop] = []
         for d in self.drops:
             d.update(dt, self.obstacles)
             if d.alive:
@@ -181,10 +184,10 @@ class Game:
 
         # Parallax paper-cut cave silhouettes (continuous ridge, no striping)
         tsec = pygame.time.get_ticks() * 0.001
-        for (color, speed, amp, freq, base_top, base_bot, step, phase) in self.layers:
+        for color, speed, amp, freq, base_top, base_bot, step, phase in self.layers:
             motion = tsec * SCROLL_SPEED * speed
             # Top ridge
-            points_top: List[Tuple[int, int]] = [(0, 0)]
+            points_top: list[tuple[int, int]] = [(0, 0)]
             x = 0
             while x <= WINDOW_WIDTH:
                 y_top = base_top + int(math.sin((x + motion) * freq + phase) * amp)
@@ -194,7 +197,7 @@ class Game:
             pygame.draw.polygon(surf, color, points_top)
 
             # Bottom ridge
-            points_bottom: List[Tuple[int, int]] = [(0, WINDOW_HEIGHT)]
+            points_bottom: list[tuple[int, int]] = [(0, WINDOW_HEIGHT)]
             x = 0
             while x <= WINDOW_WIDTH:
                 y_bot = base_bot + int(math.sin((x + 300 + motion) * freq + phase) * amp)
@@ -222,7 +225,11 @@ class Game:
         score_text = self.font_big.render(str(self.score), True, (230, 230, 230))
         surf.blit(score_text, score_text.get_rect(midtop=(WINDOW_WIDTH // 2, 20)))
 
-        help_text = self.font_small.render("Space or Left Click to flap • R to restart • Esc to quit", True, (180, 180, 190))
+        help_text = self.font_small.render(
+            "Space or Left Click to flap • R to restart • Esc to quit",
+            True,
+            (180, 180, 190),
+        )
         surf.blit(help_text, help_text.get_rect(midbottom=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 12)))
 
         if self.game_over:
@@ -251,5 +258,3 @@ class Game:
 
 def main() -> None:
     Game().run()
-
-

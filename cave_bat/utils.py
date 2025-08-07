@@ -1,0 +1,74 @@
+"""Geometry and color utility functions used across the game."""
+
+from __future__ import annotations
+
+import math
+from typing import Sequence
+
+
+def clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp a numeric value into the inclusive range [lo, hi]."""
+    return max(lo, min(hi, value))
+
+
+def distance_point_to_segment(
+    px: float,
+    py: float,
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
+) -> float:
+    """Shortest distance from point (px,py) to segment A(ax,ay)-B(bx,by)."""
+    abx, aby = bx - ax, by - ay
+    apx, apy = px - ax, py - ay
+    ab_len2 = abx * abx + aby * aby
+    if ab_len2 == 0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, (apx * abx + apy * aby) / ab_len2))
+    cx = ax + t * abx
+    cy = ay + t * aby
+    return math.hypot(px - cx, py - cy)
+
+
+def point_in_polygon(px: float, py: float, poly: Sequence[tuple[float, float]]) -> bool:
+    """Return True if point (px,py) is inside the simple polygon described by poly."""
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if (y1 > py) != (y2 > py):
+            x_at_y = x1 + (py - y1) * (x2 - x1) / (y2 - y1 + 1e-9)
+            if x_at_y > px:
+                inside = not inside
+    return inside
+
+
+def circle_polygon_collision(
+    cx: float,
+    cy: float,
+    r: float,
+    poly: Sequence[tuple[float, float]],
+) -> bool:
+    """True if circle centered at (cx,cy) with radius r intersects polygon poly."""
+    if point_in_polygon(cx, cy, poly):
+        return True
+    # Check edges
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if distance_point_to_segment(cx, cy, x1, y1, x2, y2) <= r:
+            return True
+    return False
+
+
+def scale_color(color: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+    """Scale an RGB color by factor, clamped to [0,255]."""
+    r, g, b = color
+    return (
+        int(clamp(r * factor, 0, 255)),
+        int(clamp(g * factor, 0, 255)),
+        int(clamp(b * factor, 0, 255)),
+    )

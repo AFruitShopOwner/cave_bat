@@ -24,13 +24,42 @@ Windows PowerShell example:
 cd C:\Users\Thinkbook G2 ITL\Programming\Projects\cave_bat
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# Install package with development extras (tests, linters, type checker)
+.\.venv\Scripts\python.exe -m pip install -e .[dev]
 ```
 
 ### Run
 
 ```powershell
+# Option 1: run the package entrypoint
+.\.venv\Scripts\python.exe -m cave_bat
+
+# Option 2: installed console script
+cave-bat
+
+# Option 3: thin script delegating to the package
 .\.venv\Scripts\python.exe .\main.py
 ```
 
+### Tests
 
+```powershell
+.\.venv\Scripts\pytest.exe -q
+
+# Lint, format, type-check
+.\.venv\Scripts\ruff.exe check .
+.\.venv\Scripts\black.exe --check .
+.\.venv\Scripts\mypy.exe .
+```
+
+### Development
+
+Pre-commit hooks are configured. Install them with:
+
+```powershell
+\.venv\Scripts\pre-commit.exe install
+```
+
+### License
+
+MIT License. See `LICENSE`.
