@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cave-bat"
+version = "0.1.0"
+description = "Cave Bat: a Flappy Bird–style Pygame"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pygame>=2.6.0",
+]
+
+[project.scripts]
+cave-bat = "cave_bat.game:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cave_bat*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+

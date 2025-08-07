@@ -1,0 +1,255 @@
+from __future__ import annotations
+
+import math
+import random
+import sys
+from typing import List, Tuple
+
+import pygame
+
+from .config import (
+    BAT_BODY_RADIUS,
+    BAT_X,
+    COL_BG_BOTTOM,
+    COL_BG_TOP,
+    COL_LAYER_1,
+    COL_LAYER_2,
+    COL_LAYER_3,
+    FPS,
+    MAX_GAP,
+    MARGIN_TOP_BOTTOM,
+    MIN_GAP,
+    OBSTACLE_SPACING,
+    OBSTACLE_WIDTH,
+    SCROLL_SPEED,
+    WINDOW_HEIGHT,
+    WINDOW_WIDTH,
+)
+from .entities import Bat, Obstacle, Particle, WaterDrop
+from .utils import circle_polygon_collision
+
+
+class Game:
+    def __init__(self) -> None:
+        pygame.init()
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        pygame.display.set_caption("Cave Bat")
+        self.clock = pygame.time.Clock()
+        self.font_big = pygame.font.SysFont(None, 64)
+        self.font_small = pygame.font.SysFont(None, 28)
+        self._make_overlays()
+        self._build_parallax()
+        self.drops: List[WaterDrop] = []
+
+        self.reset()
+
+    def _make_overlays(self) -> None:
+        # Vignette low-res then scale
+        small_w, small_h = 320, int(320 * WINDOW_HEIGHT / WINDOW_WIDTH)
+        s = pygame.Surface((small_w, small_h), pygame.SRCALPHA)
+        cx, cy = small_w / 2.0, small_h / 2.0
+        max_d = math.hypot(cx, cy)
+        for y in range(small_h):
+            for x in range(small_w):
+                d = math.hypot(x - cx, y - cy) / max_d
+                alpha = int(max(0, min(220, (d - 0.55) * 255 / (1.0 - 0.55))))
+                s.set_at((x, y), (0, 0, 0, alpha))
+        self.vignette = pygame.transform.smoothscale(s, (WINDOW_WIDTH, WINDOW_HEIGHT))
+
+        # Dust particles
+        self.particles: List[Particle] = [Particle() for _ in range(28)]
+
+    def _build_parallax(self) -> None:
+        # Describe layered ridge parameters for runtime generation (continuous silhouettes)
+        random_seed = 1337
+        # Each layer: (color, speed, amp, freq, base_top, base_bot, step, phase)
+        specs = [
+            (COL_LAYER_3, 0.28, 30, 0.018, 70, WINDOW_HEIGHT - 70, 18),
+            (COL_LAYER_2, 0.44, 40, 0.022, 60, WINDOW_HEIGHT - 60, 16),
+            (COL_LAYER_1, 0.64, 55, 0.026, 50, WINDOW_HEIGHT - 50, 14),
+        ]
+        self.layers = []
+        for idx, (color, speed, amp, freq, base_top, base_bot, step) in enumerate(specs):
+            rng = random.Random(random_seed + idx * 999)
+            phase = rng.random() * 1000.0
+            self.layers.append((color, speed, amp, freq, base_top, base_bot, step, phase))
+
+    def reset(self) -> None:
+        self.bat = Bat(BAT_X, WINDOW_HEIGHT // 2)
+        self.obstacles: List[Obstacle] = []
+        self.spawn_timer = 0.0
+        self.score = 0
+        self.best = 0
+        self.game_over = False
+
+        # Pre-warm obstacles so cave is visible immediately
+        x = WINDOW_WIDTH + 200
+        for _ in range(6):
+            gap_h = random.randint(MIN_GAP, MAX_GAP)
+            gap_y = random.randint(MARGIN_TOP_BOTTOM, WINDOW_HEIGHT - MARGIN_TOP_BOTTOM - gap_h)
+            self.obstacles.append(Obstacle(x, gap_y, gap_h))
+            x += OBSTACLE_SPACING
+        self.drops.clear()
+
+    def spawn_obstacle(self) -> None:
+        gap_h = random.randint(MIN_GAP, MAX_GAP)
+        gap_y = random.randint(MARGIN_TOP_BOTTOM, WINDOW_HEIGHT - MARGIN_TOP_BOTTOM - gap_h)
+        x = WINDOW_WIDTH + 80
+        self.obstacles.append(Obstacle(x, gap_y, gap_h))
+
+    def update(self, dt: float) -> None:
+        if not self.game_over:
+            self.bat.update(dt)
+
+            # Spawn obstacles
+            if len(self.obstacles) == 0 or (self.obstacles[-1].x < WINDOW_WIDTH - OBSTACLE_SPACING):
+                self.spawn_obstacle()
+
+            # Update obstacles and scoring
+            for obs in self.obstacles:
+                obs.update(dt)
+                if not obs.passed and (obs.x + OBSTACLE_WIDTH) < self.bat.x:
+                    obs.passed = True
+                    self.score += 1
+                # Occasionally spawn a dripping water drop from top tip
+                if random.random() < 0.003:
+                    top_tip = obs.get_top_tip_world()
+                    if top_tip is not None:
+                        self.drops.append(WaterDrop(top_tip[0], top_tip[1] + 2))
+
+            # Remove offscreen
+            self.obstacles = [o for o in self.obstacles if not o.offscreen()]
+
+            # Collisions with cave bounds
+            if self.bat.y - BAT_BODY_RADIUS <= 0 or self.bat.y + BAT_BODY_RADIUS >= WINDOW_HEIGHT:
+                self.trigger_game_over()
+        # Update water drops
+        alive_drops: List[WaterDrop] = []
+        for d in self.drops:
+            d.update(dt, self.obstacles)
+            if d.alive:
+                alive_drops.append(d)
+        self.drops = alive_drops
+
+        # Collisions with obstacles
+        bat_r = BAT_BODY_RADIUS
+        bat_cx = self.bat.x
+        bat_cy = self.bat.y
+        for obs in self.obstacles:
+            # Precise circle-polygon collision against each spike poly
+            collided = False
+            for poly in obs.world_polys():
+                if circle_polygon_collision(bat_cx, bat_cy, bat_r, poly):
+                    collided = True
+                    break
+            if collided:
+                self.trigger_game_over()
+                break
+
+    def trigger_game_over(self) -> None:
+        if not self.game_over:
+            self.game_over = True
+            self.bat.alive = False
+            self.best = max(self.best, self.score)
+
+    def handle_input(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_SPACE, pygame.K_UP, pygame.K_w):
+                if self.game_over:
+                    self.reset()
+                else:
+                    self.bat.flap()
+            elif event.key in (pygame.K_r,):
+                self.reset()
+            elif event.key in (pygame.K_ESCAPE,):
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:
+                if self.game_over:
+                    self.reset()
+                else:
+                    self.bat.flap()
+
+    def draw_background(self, surf: pygame.Surface) -> None:
+        # Vertical gradient
+        for y in range(0, WINDOW_HEIGHT, 4):
+            t = y / WINDOW_HEIGHT
+            r = int(COL_BG_TOP[0] * (1 - t) + COL_BG_BOTTOM[0] * t)
+            g = int(COL_BG_TOP[1] * (1 - t) + COL_BG_BOTTOM[1] * t)
+            b = int(COL_BG_TOP[2] * (1 - t) + COL_BG_BOTTOM[2] * t)
+            pygame.draw.rect(surf, (r, g, b), (0, y, WINDOW_WIDTH, 4))
+
+        # Parallax paper-cut cave silhouettes (continuous ridge, no striping)
+        tsec = pygame.time.get_ticks() * 0.001
+        for (color, speed, amp, freq, base_top, base_bot, step, phase) in self.layers:
+            motion = tsec * SCROLL_SPEED * speed
+            # Top ridge
+            points_top: List[Tuple[int, int]] = [(0, 0)]
+            x = 0
+            while x <= WINDOW_WIDTH:
+                y_top = base_top + int(math.sin((x + motion) * freq + phase) * amp)
+                points_top.append((x, y_top))
+                x += step
+            points_top.append((WINDOW_WIDTH, 0))
+            pygame.draw.polygon(surf, color, points_top)
+
+            # Bottom ridge
+            points_bottom: List[Tuple[int, int]] = [(0, WINDOW_HEIGHT)]
+            x = 0
+            while x <= WINDOW_WIDTH:
+                y_bot = base_bot + int(math.sin((x + 300 + motion) * freq + phase) * amp)
+                points_bottom.append((x, y_bot))
+                x += step
+            points_bottom.append((WINDOW_WIDTH, WINDOW_HEIGHT))
+            pygame.draw.polygon(surf, color, points_bottom)
+
+    def draw(self) -> None:
+        self.draw_background(self.screen)
+        # Subtle drifting dust
+        for p in self.particles:
+            p.draw(self.screen)
+        for obs in self.obstacles:
+            obs.draw(self.screen)
+        for d in self.drops:
+            d.draw(self.screen)
+        self.bat.draw(self.screen)
+        # Vignette overlay
+        self.screen.blit(self.vignette, (0, 0))
+        self._draw_ui(self.screen)
+        pygame.display.flip()
+
+    def _draw_ui(self, surf: pygame.Surface) -> None:
+        score_text = self.font_big.render(str(self.score), True, (230, 230, 230))
+        surf.blit(score_text, score_text.get_rect(midtop=(WINDOW_WIDTH // 2, 20)))
+
+        help_text = self.font_small.render("Space or Left Click to flap • R to restart • Esc to quit", True, (180, 180, 190))
+        surf.blit(help_text, help_text.get_rect(midbottom=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 12)))
+
+        if self.game_over:
+            title = self.font_big.render("Game Over", True, (250, 230, 230))
+            retry = self.font_small.render("Press Space/Click to play again", True, (210, 210, 220))
+            best = self.font_small.render(f"Best: {self.best}", True, (200, 200, 210))
+            surf.blit(title, title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 40)))
+            surf.blit(retry, retry.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 10)))
+            surf.blit(best, best.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 44)))
+
+    def run(self) -> None:
+        while True:
+            dt = self.clock.tick(FPS) / 1000.0
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit(0)
+                self.handle_input(event)
+
+            # Update scene
+            for p in self.particles:
+                p.update(dt)
+            self.update(dt)
+            self.draw()
+
+
+def main() -> None:
+    Game().run()
+
+
