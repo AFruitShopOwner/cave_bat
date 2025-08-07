@@ -11,6 +11,8 @@ import pygame
 from .config import (
     BAT_BODY_RADIUS,
     BAT_X,
+    FORWARD_DRAG,
+    FORWARD_THRUST,
     COL_BG_BOTTOM,
     COL_BG_TOP,
     COL_LAYER_1,
@@ -26,7 +28,7 @@ from .config import (
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
 )
-from .entities import Bat, Obstacle, Particle, WaterDrop
+from .entities import Bat, Obstacle, WaterDrop
 from .utils import circle_polygon_collision
 
 
@@ -59,8 +61,12 @@ class Game:
                 s.set_at((x, y), (0, 0, 0, alpha))
         self.vignette = pygame.transform.smoothscale(s, (WINDOW_WIDTH, WINDOW_HEIGHT))
 
-        # Dust particles
-        self.particles: list[Particle] = [Particle() for _ in range(28)]
+        # Procedural rock texture overlay (multiplies colors to add cavernous variation)
+        self.rock_mult = self._generate_rock_texture()
+
+        # Soft drifting mist to add humidity and depth
+        self.mist_tex = self._generate_mist_texture()
+
 
     def _build_parallax(self) -> None:
         # Describe layered ridge parameters for runtime generation (continuous silhouettes)
@@ -77,6 +83,49 @@ class Game:
             phase = rng.random() * 1000.0
             self.layers.append((color, speed, amp, freq, base_top, base_bot, step, phase))
 
+    def _generate_rock_texture(self) -> pygame.Surface:
+        # Build a low-res greyscale multiplier texture and scale up
+        base_w, base_h = 320, int(320 * WINDOW_HEIGHT / WINDOW_WIDTH)
+        tex = pygame.Surface((base_w, base_h))
+
+        # Multi-frequency trigonometric noise for striated rocky appearance
+        for y in range(base_h):
+            for x in range(base_w):
+                xf = x / base_w
+                yf = y / base_h
+                v = 0.0
+                v += math.sin(xf * 21.0 + math.sin(yf * 7.0)) * 0.45
+                v += math.sin(yf * 17.0 + math.sin(xf * 9.0 + 1.7)) * 0.35
+                v += math.sin((xf + yf) * 13.0) * 0.20
+                # Ridge the noise (rocks have creases)
+                v = abs(v)
+                # Map to [0..1]
+                v = max(0.0, min(1.0, v))
+                # Convert to a gentle darkening multiplier around 220..255
+                c = int(230 - 40 * v)
+                tex.set_at((x, y), (c, c, c))
+
+        rock_mult = pygame.transform.smoothscale(tex, (WINDOW_WIDTH, WINDOW_HEIGHT))
+        return rock_mult
+
+    def _generate_mist_texture(self) -> pygame.Surface:
+        # Low-res translucent texture with soft swirls
+        w, h = 320, int(320 * WINDOW_HEIGHT / WINDOW_WIDTH)
+        s = pygame.Surface((w, h), pygame.SRCALPHA)
+        for y in range(h):
+            for x in range(w):
+                xf = x / w
+                yf = y / h
+                v = 0.0
+                v += math.sin((xf * 6.0) + math.sin(yf * 2.0)) * 0.6
+                v += math.sin((yf * 4.0) + math.sin(xf * 3.0 + 1.3)) * 0.4
+                v = (v + 2.0) / 4.0  # map roughly to [0..1]
+                # Fade mist near screen top to suggest warmer air near ceiling is clearer
+                fade = min(1.0, max(0.0, (yf * 1.2)))
+                a = int(0 + 28 * v * fade)
+                s.set_at((x, y), (180, 188, 200, a))
+        return pygame.transform.smoothscale(s, (WINDOW_WIDTH, WINDOW_HEIGHT))
+
     def reset(self) -> None:
         self.bat = Bat(BAT_X, WINDOW_HEIGHT // 2)
         self.obstacles: list[Obstacle] = []
@@ -84,6 +133,10 @@ class Game:
         self.score = 0
         self.best = 0
         self.game_over = False
+        self.time_accum = 0.0
+        # Bat-driven forward motion state
+        self.forward_speed = SCROLL_SPEED * 0.0  # start stationary
+        self.scroll_offset = 0.0
 
         # Pre-warm obstacles so cave is visible immediately
         x = WINDOW_WIDTH + 200
@@ -101,16 +154,27 @@ class Game:
         self.obstacles.append(Obstacle(x, gap_y, gap_h))
 
     def update(self, dt: float) -> None:
+        # Continuous time accumulator for background effects
+        self.time_accum += dt
         if not self.game_over:
             self.bat.update(dt)
 
+            # Update forward speed: apply drag each frame
+            self.forward_speed -= self.forward_speed * FORWARD_DRAG * dt
+            # Clamp
+            self.forward_speed = max(0.0, min(self.forward_speed, FORWARD_THRUST + SCROLL_SPEED))
+            # Integrate scroll offset based on current forward speed
+            self.scroll_offset += self.forward_speed * dt
+
             # Spawn obstacles
-            if len(self.obstacles) == 0 or (self.obstacles[-1].x < WINDOW_WIDTH - OBSTACLE_SPACING):
+            # Spawn spacing depends on forward speed; if very slow, don't jam spawn
+            spacing = max(OBSTACLE_SPACING * 0.8, OBSTACLE_SPACING * min(1.5, (self.forward_speed + 1.0) / (SCROLL_SPEED + 1.0)))
+            if len(self.obstacles) == 0 or (self.obstacles[-1].x < WINDOW_WIDTH - spacing):
                 self.spawn_obstacle()
 
             # Update obstacles and scoring
             for obs in self.obstacles:
-                obs.update(dt)
+                obs.update(dt, scroll_speed=self.forward_speed)
                 if not obs.passed and (obs.x + OBSTACLE_WIDTH) < self.bat.x:
                     obs.passed = True
                     self.score += 1
@@ -162,6 +226,8 @@ class Game:
                     self.reset()
                 else:
                     self.bat.flap()
+                    # Apply forward thrust on flap
+                    self.forward_speed += FORWARD_THRUST
             elif event.key in (pygame.K_r,):
                 self.reset()
             elif event.key in (pygame.K_ESCAPE,):
@@ -172,6 +238,7 @@ class Game:
                     self.reset()
                 else:
                     self.bat.flap()
+                    self.forward_speed += FORWARD_THRUST
 
     def draw_background(self, surf: pygame.Surface) -> None:
         # Vertical gradient
@@ -183,9 +250,8 @@ class Game:
             pygame.draw.rect(surf, (r, g, b), (0, y, WINDOW_WIDTH, 4))
 
         # Parallax paper-cut cave silhouettes (continuous ridge, no striping)
-        tsec = pygame.time.get_ticks() * 0.001
         for color, speed, amp, freq, base_top, base_bot, step, phase in self.layers:
-            motion = tsec * SCROLL_SPEED * speed
+            motion = self.scroll_offset * speed
             # Top ridge
             points_top: list[tuple[int, int]] = [(0, 0)]
             x = 0
@@ -206,11 +272,23 @@ class Game:
             points_bottom.append((WINDOW_WIDTH, WINDOW_HEIGHT))
             pygame.draw.polygon(surf, color, points_bottom)
 
+        # Apply rock texture multiplier for cavern feel
+        surf.blit(self.rock_mult, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+
+        # Add subtle drifting mist (two layers for variation)
+        if hasattr(self, "mist_tex"):
+            ox = int(-(self.scroll_offset * 0.15)) % self.mist_tex.get_width()
+            oy = int(math.sin(self.time_accum * 0.23) * 8)
+            # Tile horizontally to cover screen
+            for layer in (0.0, 0.35):
+                layer_ox = (ox + int(layer * 200)) % self.mist_tex.get_width()
+                dest1 = (-layer_ox, oy)
+                dest2 = (self.mist_tex.get_width() - layer_ox, oy)
+                surf.blit(self.mist_tex, dest1)
+                surf.blit(self.mist_tex, dest2)
+
     def draw(self) -> None:
         self.draw_background(self.screen)
-        # Subtle drifting dust
-        for p in self.particles:
-            p.draw(self.screen)
         for obs in self.obstacles:
             obs.draw(self.screen)
         for d in self.drops:
@@ -250,8 +328,6 @@ class Game:
                 self.handle_input(event)
 
             # Update scene
-            for p in self.particles:
-                p.update(dt)
             self.update(dt)
             self.draw()
 

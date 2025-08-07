@@ -13,7 +13,7 @@ FLAP_IMPULSE = -600.0  # px/s
 MAX_FALL_SPEED = 1200.0  # px/s
 
 # Obstacles
-SCROLL_SPEED = 280.0  # px/s
+SCROLL_SPEED = 280.0  # px/s (legacy default; dynamic speed can override at runtime)
 OBSTACLE_SPACING = 360  # px between obstacles
 OBSTACLE_WIDTH = 120
 MIN_GAP = 210
@@ -40,9 +40,24 @@ WATER_COLOR = (130, 180, 255)
 BAT_COLOR = (24, 24, 28)
 BAT_RIM = (120, 115, 160)
 BAT_MEMBRANE = (30, 30, 36)
+# New bat materials for richer rendering
+BAT_FUR = (28, 28, 34)
+BAT_FUR_DARK = (18, 18, 22)
+BAT_MEMBRANE_LIGHT = (44, 44, 52)
+BAT_INNER_EAR = (90, 70, 110)
+BAT_NOSE = (70, 60, 80)
+BAT_FANG = (230, 230, 235)
 EYE_COLOR = (220, 220, 230)
 PUPIL_COLOR = (28, 28, 32)
+EYE_LID_COLOR = (40, 40, 46)
 
 # Wing animation
-WING_FLAP_DURATION = 0.23  # seconds per triggered flap
-WING_FLAP_AMPLITUDE_DEG = 45.0
+# Longer duration for a slower, more graceful flap
+WING_FLAP_DURATION = 0.45  # seconds per triggered flap
+WING_FLAP_AMPLITUDE_DEG = 64.0
+
+# Forward motion (environment scroll) driven by bat flaps
+# Thrust increases forward speed on each flap; speed decays via drag when idle
+FORWARD_THRUST = 260.0  # instantaneous speed added on flap (px/s)
+MAX_FORWARD_SPEED = 360.0  # clamp for comfort
+FORWARD_DRAG = 1.6  # per-second proportional drag coefficient

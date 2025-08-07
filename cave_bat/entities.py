@@ -13,52 +13,19 @@ import pygame
 from .config import (
     BAT_BODY_RADIUS,
     BAT_COLOR,
-    BAT_MEMBRANE,
     BAT_RIM,
-    BAT_WING_LENGTH,
-    BAT_WING_SPAN,
     COL_ROCK_BASE,
     COL_ROCK_SHADE,
-    EYE_COLOR,
     FLAP_IMPULSE,
     GRAVITY,
     MAX_FALL_SPEED,
     OBSTACLE_WIDTH,
-    PUPIL_COLOR,
     SCROLL_SPEED,
     WATER_COLOR,
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
-    WING_FLAP_AMPLITUDE_DEG,
-    WING_FLAP_DURATION,
 )
 from .utils import circle_polygon_collision, clamp, scale_color
-
-
-class Particle:
-    def __init__(self) -> None:
-        self.reset()
-
-    def reset(self) -> None:
-        self.x = random.uniform(0, WINDOW_WIDTH)
-        self.y = random.uniform(0, WINDOW_HEIGHT)
-        self.vx = -random.uniform(15.0, 40.0)
-        self.vy = random.uniform(-6.0, 6.0)
-        self.radius = random.uniform(1.0, 2.5)
-        self.alpha = random.randint(35, 65)
-
-    def update(self, dt: float) -> None:
-        self.x += self.vx * dt
-        self.y += self.vy * dt
-        if self.x < -10 or self.y < -20 or self.y > WINDOW_HEIGHT + 20:
-            self.reset()
-            self.x = WINDOW_WIDTH + random.uniform(0, 120)
-
-    def draw(self, surf: pygame.Surface) -> None:
-        color = (200, 200, 220, self.alpha)
-        s = pygame.Surface((int(self.radius * 4), int(self.radius * 4)), pygame.SRCALPHA)
-        pygame.draw.circle(s, color, (s.get_width() // 2, s.get_height() // 2), int(self.radius))
-        surf.blit(s, (int(self.x), int(self.y)), special_flags=pygame.BLEND_PREMULTIPLIED)
 
 
 class WaterDrop:
@@ -100,150 +67,201 @@ class Bat:
         self.y = float(y)
         self.vy = 0.0
         self.alive = True
-
-        self.wing_timer = 0.0
-        self.base_idle_phase = random.random() * math.tau
+        # Animation state
+        self._wing_phase = 0.0  # continuous idle flutter phase (radians)
+        self._flap_time_left = 0.0  # time remaining in active flap burst
+        self._wing_angle_deg = 0.0  # computed per-frame
 
     def reset(self, x: int, y: int) -> None:
         self.x = float(x)
         self.y = float(y)
         self.vy = 0.0
         self.alive = True
-        self.wing_timer = 0.0
+        self._wing_phase = 0.0
+        self._flap_time_left = 0.0
+        self._wing_angle_deg = 0.0
 
     def flap(self) -> None:
         if not self.alive:
             return
         self.vy = FLAP_IMPULSE
-        self.wing_timer = WING_FLAP_DURATION
+        # Trigger a stronger wing flap burst
+        from .config import WING_FLAP_DURATION
+
+        self._flap_time_left = max(self._flap_time_left, WING_FLAP_DURATION)
 
     def update(self, dt: float) -> None:
         if not self.alive:
             return
         self.vy = clamp(self.vy + GRAVITY * dt, -9999.0, MAX_FALL_SPEED)
         self.y += self.vy * dt
+        # Advance idle flutter phase (slower when falling fast)
+        speed_factor = 1.0 + clamp(abs(self.vy) / 600.0, 0.0, 0.8)
+        # Much slower idle flutter baseline
+        self._wing_phase += dt * 2.4 * (0.7 + 0.3 * speed_factor)
+        # Decrease active flap timer
+        if self._flap_time_left > 0.0:
+            self._flap_time_left = max(0.0, self._flap_time_left - dt)
+        # Compute wing angle for this frame (idle flutter + active flap burst)
+        from .config import WING_FLAP_AMPLITUDE_DEG, WING_FLAP_DURATION
 
-        if self.wing_timer > 0.0:
-            self.wing_timer -= dt
-
-    def get_draw_rotation(self) -> float:
-        # Tilt nose up when going up, down when falling
-        t = clamp(-self.vy / 700.0, -0.8, 0.6)
-        return t * 35.0  # degrees
+        idle_amp = 12.0  # gentle idle amplitude
+        idle = idle_amp * math.sin(self._wing_phase)
+        # Smooth flap envelope: sin(pi*t) (starts and ends at 0, peaks at t=0.5)
+        if self._flap_time_left > 0.0 and WING_FLAP_DURATION > 0.0:
+            t = 1.0 - (self._flap_time_left / WING_FLAP_DURATION)
+            t = clamp(t, 0.0, 1.0)
+            s = math.sin(math.pi * t)
+            burst = WING_FLAP_AMPLITUDE_DEG * s
+        else:
+            burst = 0.0
+        self._wing_angle_deg = idle + burst
 
     def draw(self, surf: pygame.Surface) -> None:
-        # Wing angle: quick flap when triggered; subtle idle flutter otherwise
-        if self.wing_timer > 0.0:
-            phase = 1.0 - (self.wing_timer / WING_FLAP_DURATION)
-            wing_angle_deg = WING_FLAP_AMPLITUDE_DEG * math.sin(phase * math.pi)
-        else:
-            idle = math.sin(pygame.time.get_ticks() * 0.009 + self.base_idle_phase) * 8.0
-            wing_angle_deg = idle
-
-        self._draw_bat(surf, (int(self.x), int(self.y)), self.get_draw_rotation(), wing_angle_deg)
-
-    def _draw_bat(
-        self,
-        surf: pygame.Surface,
-        center: tuple[int, int],
-        rotation_deg: float,
-        wing_angle_deg: float,
-    ) -> None:
-        cx, cy = center
-
-        # Precompute trigs
-        rot_rad = math.radians(rotation_deg)
-        cos_r = math.cos(rot_rad)
-        sin_r = math.sin(rot_rad)
-
-        def rotate_point(px: float, py: float) -> tuple[int, int]:
-            rx = px * cos_r - py * sin_r
-            ry = px * sin_r + py * cos_r
-            return int(cx + rx), int(cy + ry)
-
-        # Body (circle) and head with subtle rim light
-        body_color = BAT_COLOR
-        head_radius = int(BAT_BODY_RADIUS * 0.7)
-
-        # Base body
-        pygame.draw.circle(surf, body_color, (cx, cy), BAT_BODY_RADIUS)
-        head_pos = rotate_point(BAT_BODY_RADIUS + head_radius - 4, 0)
-        pygame.draw.circle(surf, body_color, head_pos, head_radius)
-
-        # Rim light along top-left side
-        rim_offset = (-4, -4)
-        pygame.draw.circle(
-            surf,
+        # Procedural bat, side view facing right: body, head, ears, one near wing (front), one far wing (back)
+        from .config import (
+            BAT_FANG,
+            BAT_FUR,
+            BAT_FUR_DARK,
+            BAT_INNER_EAR,
+            BAT_MEMBRANE,
+            BAT_MEMBRANE_LIGHT,
             BAT_RIM,
-            (cx + rim_offset[0], cy + rim_offset[1]),
-            BAT_BODY_RADIUS,
-            2,
-        )
-        pygame.draw.circle(
-            surf,
-            BAT_RIM,
-            (head_pos[0] + rim_offset[0], head_pos[1] + rim_offset[1]),
-            head_radius,
-            2,
+            EYE_COLOR,
+            PUPIL_COLOR,
+            EYE_LID_COLOR,
+            BAT_WING_LENGTH,
+            BAT_WING_SPAN,
         )
 
-        # Ears
-        ear_offset = head_radius - 2
-        left_ear_base = rotate_point(BAT_BODY_RADIUS + head_radius - 6, -ear_offset)
-        right_ear_base = rotate_point(BAT_BODY_RADIUS + head_radius - 6, ear_offset)
+        cx, cy = int(self.x), int(self.y)
+        r = BAT_BODY_RADIUS
 
-        def ear_points(base: tuple[int, int], side: int) -> list[tuple[int, int]]:
-            bx, by = base
-            tip = rotate_point(BAT_BODY_RADIUS + head_radius + 12, side * (-ear_offset - 10))
-            return [base, (bx - 6, by - 6), tip, (bx + 4, by + 2)]
+        # Body tilt based on vertical velocity (like Flappy Bird)
+        tilt = clamp(self.vy / 900.0, -0.35, 0.9)  # radians approx
+        cos_t, sin_t = math.cos(tilt), math.sin(tilt)
 
-        pygame.draw.polygon(surf, body_color, ear_points(left_ear_base, -1))
-        pygame.draw.polygon(surf, body_color, ear_points(right_ear_base, +1))
+        def rot(x: float, y: float) -> tuple[int, int]:
+            rx = cx + int(x * cos_t - y * sin_t)
+            ry = cy + int(x * sin_t + y * cos_t)
+            return rx, ry
 
-        # Eyes
-        eye_r = max(2, head_radius // 4)
-        left_eye = rotate_point(BAT_BODY_RADIUS + head_radius - eye_r - 2, -eye_r)
-        right_eye = rotate_point(BAT_BODY_RADIUS + head_radius - eye_r - 2, eye_r)
-        pygame.draw.circle(surf, EYE_COLOR, left_eye, eye_r)
-        pygame.draw.circle(surf, EYE_COLOR, right_eye, eye_r)
-        pygame.draw.circle(surf, PUPIL_COLOR, left_eye, max(1, eye_r // 2))
-        pygame.draw.circle(surf, PUPIL_COLOR, right_eye, max(1, eye_r // 2))
+        # Draw wings (side view). Shoulder located slightly forward on body
+        def draw_side_wing(shoulder_world: tuple[int, int], near: bool) -> None:
+            sx, sy = shoulder_world
+            L = float(BAT_WING_LENGTH)
+            S = float(BAT_WING_SPAN)
+            # Wing defined in local coords with forward = +X (to the right). Membrane extends backward (-X)
+            base_points = [
+                (0.0, 0.0),  # shoulder
+                (-1.00 * L, -0.10 * S),  # top outer tip (aft/up)
+                (-1.10 * L, 0.25 * S),  # aft peak
+                (-0.60 * L, 0.55 * S),  # inner membrane peak
+                (-0.15 * L, 0.18 * S),  # root lower
+            ]
+            # Wing rotation around shoulder by flap angle (near wing uses full, far wing slightly reduced)
+            ang_deg = self._wing_angle_deg * (1.0 if near else 0.75)
+            ang = math.radians(ang_deg)
+            ca, sa = math.cos(ang), math.sin(ang)
 
-        # Wings
-        wing_angle_rad = math.radians(wing_angle_deg)
+            def rloc(x: float, y: float) -> tuple[int, int]:
+                rx = sx + int(x * ca - y * sa)
+                ry = sy + int(x * sa + y * ca)
+                return rx, ry
 
-        def wing_points(side: int) -> list[tuple[int, int]]:
-            # side: -1 left, +1 right
-            base_local = (0, side * (BAT_BODY_RADIUS - 6))
-            span = BAT_WING_SPAN
-            length = BAT_WING_LENGTH
+            outline = [rloc(x, y) for (x, y) in base_points]
+            color = BAT_MEMBRANE if near else scale_color(BAT_MEMBRANE, 0.8)
+            pygame.draw.polygon(surf, color, outline)
+            pygame.draw.lines(surf, BAT_RIM, True, outline, 2 if near else 1)
+            # Ribs
+            rib_targets = [base_points[2], base_points[3]]
+            for bx, by in rib_targets:
+                p0 = rloc(0.0, 0.0)
+                p1 = rloc(bx, by)
+                pygame.draw.line(surf, BAT_MEMBRANE_LIGHT, p0, p1, 2 if near else 1)
 
-            # Apply wing flap angle around base hinge
-            cos_w = math.cos(wing_angle_rad * side)
-            sin_w = math.sin(wing_angle_rad * side)
+        # Shoulder location relative to body center (slightly forward and up)
+        shoulder_world = rot(r * 0.25, -r * 0.25)
+        # Far wing first (behind body)
+        draw_side_wing(shoulder_world, near=False)
 
-            def local_transform(px: float, py: float) -> tuple[int, int]:
-                # wing rotation around base hinge, then body rotation
-                # rotate around hinge in wing plane
-                wx = (px - base_local[0]) * cos_w - (py - base_local[1]) * sin_w + base_local[0]
-                wy = (px - base_local[0]) * sin_w + (py - base_local[1]) * cos_w + base_local[1]
-                return rotate_point(wx, wy)
+        # Draw body (two-tone fur ellipse with rim light)
+        body_rect = pygame.Rect(0, 0, int(r * 2.0), int(r * 2.2))
+        body_rect.center = (cx, cy)
+        pygame.draw.ellipse(surf, BAT_FUR, body_rect)
+        # Lower shadow
+        shadow_rect = body_rect.copy()
+        shadow_rect.height = int(body_rect.height * 0.55)
+        shadow_rect.top = body_rect.centery
+        pygame.draw.ellipse(surf, BAT_FUR_DARK, shadow_rect)
+        # Rim outline
+        pygame.draw.ellipse(surf, BAT_RIM, body_rect, 2)
 
-            tip = local_transform(length, side * 0)
-            front = local_transform(length * 0.55, side * (span * 0.55))
-            back = local_transform(length * 0.55, side * (-span * 0.55))
-            base_front = local_transform(-6, side * (span * 0.25))
-            base_back = local_transform(-6, side * (-span * 0.25))
+        # Head (front, facing right)
+        head_r = int(r * 0.85)
+        head_center = rot(r * 0.85, -r * 0.15)
+        pygame.draw.circle(surf, BAT_FUR, head_center, head_r)
+        pygame.draw.circle(surf, BAT_RIM, head_center, head_r, 2)
 
-            return [base_back, back, tip, front, base_front]
+        # Ears (one prominent near ear, one smaller far ear)
+        near_ear = [
+            rot(r * 0.65, -r * 1.2),
+            rot(r * 0.95, -r * 0.5),
+            rot(r * 0.35, -r * 0.55),
+        ]
+        far_ear = [
+            rot(r * 0.45, -r * 1.05),
+            rot(r * 0.70, -r * 0.55),
+            rot(r * 0.25, -r * 0.60),
+        ]
+        pygame.draw.polygon(surf, BAT_FUR, near_ear)
+        pygame.draw.polygon(surf, BAT_FUR, far_ear)
+        pygame.draw.polygon(surf, BAT_RIM, near_ear, 2)
+        pygame.draw.polygon(surf, BAT_RIM, far_ear, 1)
+        # Inner ear on near ear only
+        inner_near = [
+            rot(r * 0.68, -r * 1.05),
+            rot(r * 0.88, -r * 0.62),
+            rot(r * 0.52, -r * 0.65),
+        ]
+        pygame.draw.polygon(surf, BAT_INNER_EAR, inner_near)
 
-        def draw_wing(side: int) -> None:
-            pts = wing_points(side)
-            pygame.draw.polygon(surf, BAT_MEMBRANE, pts)
-            pygame.draw.lines(surf, BAT_RIM, False, pts, 2)
+        # Single eye (near side)
+        eye_pos = rot(r * 0.95, -r * 0.12)
+        eye_r = max(2, int(r * 0.22))
+        pygame.draw.circle(surf, EYE_COLOR, eye_pos, eye_r)
+        # Pupil slight look based on vy
+        look = clamp(self.vy / 600.0, -0.6, 0.6)
+        pupil_offset = (int(look * eye_r * 0.6), int(eye_r * 0.15))
+        pygame.draw.circle(
+            surf,
+            PUPIL_COLOR,
+            (eye_pos[0] + pupil_offset[0], eye_pos[1] + pupil_offset[1]),
+            max(1, eye_r // 2),
+        )
+        # Upper eyelid
+        lid_w = int(eye_r * 2.2)
+        lid_h = int(eye_r * 0.9)
+        pygame.draw.arc(
+            surf,
+            EYE_LID_COLOR,
+            pygame.Rect(eye_pos[0] - lid_w // 2, eye_pos[1] - lid_h, lid_w, lid_h),
+            math.pi,
+            2 * math.pi,
+            2,
+        )
 
-        draw_wing(-1)
-        draw_wing(+1)
+        # Simple muzzle/fang near bottom of head
+        fang_base = rot(r * 1.05, r * 0.35)
+        fang = [
+            fang_base,
+            rot(r * 1.00, r * 0.55),
+            rot(r * 1.12, r * 0.55),
+        ]
+        pygame.draw.polygon(surf, BAT_FANG, fang)
+
+        # Near wing in front of body
+        draw_side_wing(shoulder_world, near=True)
 
 
 class Obstacle:
@@ -274,8 +292,9 @@ class Obstacle:
         bottom_top = self.gap_y + self.gap_h
         return pygame.Rect(int(self.x), bottom_top, OBSTACLE_WIDTH, WINDOW_HEIGHT - bottom_top)
 
-    def update(self, dt: float) -> None:
-        self.x -= SCROLL_SPEED * dt
+    def update(self, dt: float, scroll_speed: float | None = None) -> None:
+        speed = SCROLL_SPEED if scroll_speed is None else scroll_speed
+        self.x -= speed * dt
 
     def offscreen(self) -> bool:
         return self.x + OBSTACLE_WIDTH < -20
