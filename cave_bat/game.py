@@ -28,7 +28,7 @@ from .config import (
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
 )
-from .entities import Bat, Obstacle, WaterDrop
+from .entities import Bat, Obstacle, WaterDrop, BloodDrop, BatPart
 from .utils import circle_polygon_collision
 
 
@@ -45,6 +45,8 @@ class Game:
         self._make_overlays()
         self._build_parallax()
         self.drops: list[WaterDrop] = []
+        self.blood: list[BloodDrop] = []
+        self.bat_parts: list[BatPart] = []
 
         self.reset()
 
@@ -146,6 +148,8 @@ class Game:
             self.obstacles.append(Obstacle(x, gap_y, gap_h))
             x += OBSTACLE_SPACING
         self.drops.clear()
+        self.blood.clear()
+        self.bat_parts.clear()
 
     def spawn_obstacle(self) -> None:
         gap_h = random.randint(MIN_GAP, MAX_GAP)
@@ -193,10 +197,26 @@ class Game:
         # Update water drops
         alive_drops: list[WaterDrop] = []
         for d in self.drops:
-            d.update(dt, self.obstacles)
+            d.update(dt, self.obstacles, scroll_speed=self.forward_speed)
             if d.alive:
                 alive_drops.append(d)
         self.drops = alive_drops
+
+        # Update blood drops
+        alive_blood: list[BloodDrop] = []
+        for b in self.blood:
+            b.update(dt, self.obstacles, scroll_speed=self.forward_speed)
+            if b.alive:
+                alive_blood.append(b)
+        self.blood = alive_blood
+
+        # Update bat parts (they fall regardless of game over state)
+        alive_parts: list[BatPart] = []
+        for p in self.bat_parts:
+            p.update(dt, scroll_speed=self.forward_speed)
+            if p.alive:
+                alive_parts.append(p)
+        self.bat_parts = alive_parts
 
         # Collisions with obstacles
         bat_r = BAT_BODY_RADIUS
@@ -210,6 +230,29 @@ class Game:
                     collided = True
                     break
             if collided:
+                # Spawn blood only if near a tip (stalactite or stalagmite)
+                tip_candidates: list[tuple[int, int]] = []
+                top_tip = obs.get_top_tip_world()
+                if top_tip is not None:
+                    tip_candidates.append(top_tip)
+                bottom_tip = getattr(obs, "get_bottom_tip_world", None)
+                if callable(bottom_tip):
+                    bt = bottom_tip()
+                    if bt is not None:
+                        tip_candidates.append(bt)
+                # Find closest tip to bat center
+                if tip_candidates:
+                    tx, ty = min(
+                        tip_candidates,
+                        key=lambda p: (p[0] - bat_cx) * (p[0] - bat_cx) + (p[1] - bat_cy) * (p[1] - bat_cy),
+                    )
+                    dx = tx - bat_cx
+                    dy = ty - bat_cy
+                    dist2 = dx * dx + dy * dy
+                    if dist2 <= (bat_r + 10) * (bat_r + 10):
+                        # Spawn a burst of blood droplets at the tip
+                        for _ in range(22):
+                            self.blood.append(BloodDrop(tx, ty))
                 self.trigger_game_over()
                 break
 
@@ -218,6 +261,8 @@ class Game:
             self.game_over = True
             self.bat.alive = False
             self.best = max(self.best, self.score)
+            # Spawn bat parts exactly once on death
+            self.bat_parts = self.bat.break_apart()
 
     def handle_input(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN:
@@ -293,7 +338,13 @@ class Game:
             obs.draw(self.screen)
         for d in self.drops:
             d.draw(self.screen)
-        self.bat.draw(self.screen)
+        if self.bat_parts:
+            for p in self.bat_parts:
+                p.draw(self.screen)
+        else:
+            self.bat.draw(self.screen)
+        for b in self.blood:
+            b.draw(self.screen)
         # Vignette overlay
         self.screen.blit(self.vignette, (0, 0))
         self._draw_ui(self.screen)

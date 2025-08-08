@@ -31,6 +31,26 @@ def distance_point_to_segment(
     return math.hypot(px - cx, py - cy)
 
 
+def closest_point_on_segment(
+    px: float,
+    py: float,
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
+) -> tuple[float, float]:
+    """Return the closest point on the segment A(ax,ay)-B(bx,by) to point P(px,py)."""
+    abx, aby = bx - ax, by - ay
+    apx, apy = px - ax, py - ay
+    ab_len2 = abx * abx + aby * aby
+    if ab_len2 == 0:
+        return ax, ay
+    t = max(0.0, min(1.0, (apx * abx + apy * aby) / ab_len2))
+    cx = ax + t * abx
+    cy = ay + t * aby
+    return cx, cy
+
+
 def point_in_polygon(px: float, py: float, poly: Sequence[tuple[float, float]]) -> bool:
     """Return True if point (px,py) is inside the simple polygon described by poly."""
     inside = False
@@ -62,6 +82,25 @@ def circle_polygon_collision(
         if distance_point_to_segment(cx, cy, x1, y1, x2, y2) <= r:
             return True
     return False
+
+
+def polygon_closest_point(
+    px: float, py: float, poly: Sequence[tuple[float, float]]
+) -> tuple[float, float]:
+    """Closest point on polygon edges to (px,py)."""
+    best: tuple[float, float] | None = None
+    best_d2 = float("inf")
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        cx, cy = closest_point_on_segment(px, py, x1, y1, x2, y2)
+        d2 = (cx - px) * (cx - px) + (cy - py) * (cy - py)
+        if d2 < best_d2:
+            best_d2 = d2
+            best = (cx, cy)
+    # Fallback if polygon is degenerate
+    return best if best is not None else (px, py)
 
 
 def scale_color(color: tuple[int, int, int], factor: float) -> tuple[int, int, int]:

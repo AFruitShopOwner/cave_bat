@@ -36,6 +36,7 @@ COL_ROCK_BASE = (74, 76, 92)  # bluish limestone base
 COL_ROCK_SHADE = (58, 60, 78)  # occluded shade
 COL_ROCK_EDGE = (150, 150, 180)  # cool chalky highlight
 WATER_COLOR = (130, 180, 255)
+BLOOD_COLOR = (200, 30, 40)
 
 BAT_COLOR = (24, 24, 28)
 BAT_RIM = (120, 115, 160)
