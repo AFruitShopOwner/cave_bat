@@ -194,6 +194,45 @@ class Game:
             # Collisions with cave bounds
             if self.bat.y - BAT_BODY_RADIUS <= 0 or self.bat.y + BAT_BODY_RADIUS >= WINDOW_HEIGHT:
                 self.trigger_game_over()
+
+            # Collisions with obstacles
+            bat_r = BAT_BODY_RADIUS
+            bat_cx = self.bat.x
+            bat_cy = self.bat.y
+            for obs in self.obstacles:
+                # Precise circle-polygon collision against each spike poly
+                collided = False
+                for poly in obs.world_polys():
+                    if circle_polygon_collision(bat_cx, bat_cy, bat_r, poly):
+                        collided = True
+                        break
+                if collided:
+                    # Spawn blood only if near a tip (stalactite or stalagmite)
+                    tip_candidates: list[tuple[int, int]] = []
+                    top_tip = obs.get_top_tip_world()
+                    if top_tip is not None:
+                        tip_candidates.append(top_tip)
+                    bottom_tip = getattr(obs, "get_bottom_tip_world", None)
+                    if callable(bottom_tip):
+                        bt = bottom_tip()
+                        if bt is not None:
+                            tip_candidates.append(bt)
+                    # Find closest tip to bat center
+                    if tip_candidates:
+                        tx, ty = min(
+                            tip_candidates,
+                            key=lambda p: (p[0] - bat_cx) * (p[0] - bat_cx) + (p[1] - bat_cy) * (p[1] - bat_cy),
+                        )
+                        dx = tx - bat_cx
+                        dy = ty - bat_cy
+                        dist2 = dx * dx + dy * dy
+                        if dist2 <= (bat_r + 10) * (bat_r + 10):
+                            # Spawn a burst of blood droplets at the tip
+                            for _ in range(22):
+                                self.blood.append(BloodDrop(tx, ty))
+                    self.trigger_game_over()
+                    break
+
         # Update water drops
         alive_drops: list[WaterDrop] = []
         for d in self.drops:
@@ -216,45 +255,10 @@ class Game:
             p.update(dt, scroll_speed=self.forward_speed)
             if p.alive:
                 alive_parts.append(p)
+                # Spawn a small trail of blood from falling parts
+                if random.random() < 4.0 * dt:  # Approx 4 drips/sec/part
+                    self.blood.append(BloodDrop(p.x, p.y))
         self.bat_parts = alive_parts
-
-        # Collisions with obstacles
-        bat_r = BAT_BODY_RADIUS
-        bat_cx = self.bat.x
-        bat_cy = self.bat.y
-        for obs in self.obstacles:
-            # Precise circle-polygon collision against each spike poly
-            collided = False
-            for poly in obs.world_polys():
-                if circle_polygon_collision(bat_cx, bat_cy, bat_r, poly):
-                    collided = True
-                    break
-            if collided:
-                # Spawn blood only if near a tip (stalactite or stalagmite)
-                tip_candidates: list[tuple[int, int]] = []
-                top_tip = obs.get_top_tip_world()
-                if top_tip is not None:
-                    tip_candidates.append(top_tip)
-                bottom_tip = getattr(obs, "get_bottom_tip_world", None)
-                if callable(bottom_tip):
-                    bt = bottom_tip()
-                    if bt is not None:
-                        tip_candidates.append(bt)
-                # Find closest tip to bat center
-                if tip_candidates:
-                    tx, ty = min(
-                        tip_candidates,
-                        key=lambda p: (p[0] - bat_cx) * (p[0] - bat_cx) + (p[1] - bat_cy) * (p[1] - bat_cy),
-                    )
-                    dx = tx - bat_cx
-                    dy = ty - bat_cy
-                    dist2 = dx * dx + dy * dy
-                    if dist2 <= (bat_r + 10) * (bat_r + 10):
-                        # Spawn a burst of blood droplets at the tip
-                        for _ in range(22):
-                            self.blood.append(BloodDrop(tx, ty))
-                self.trigger_game_over()
-                break
 
     def trigger_game_over(self) -> None:
         if not self.game_over:
