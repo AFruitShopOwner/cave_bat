@@ -338,10 +338,12 @@ class Game:
             obs.draw(self.screen)
         for d in self.drops:
             d.draw(self.screen)
+        # If the bat has broken apart, draw the falling pieces.
         if self.bat_parts:
             for p in self.bat_parts:
                 p.draw(self.screen)
-        else:
+        # Otherwise, draw the main bat only if it is alive.
+        elif self.bat.alive:
             self.bat.draw(self.screen)
         for b in self.blood:
             b.draw(self.screen)
