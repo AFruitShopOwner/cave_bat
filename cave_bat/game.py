@@ -37,7 +37,7 @@ class Game:
 
     def __init__(self) -> None:
         pygame.init()
-        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.DOUBLEBUF)
         pygame.display.set_caption("Cave Bat")
         self.clock = pygame.time.Clock()
         self.font_big = pygame.font.SysFont(None, 64)
@@ -48,10 +48,13 @@ class Game:
         self.blood: list[BloodDrop] = []
         self.bat_parts: list[BatPart] = []
 
+        # Precompute gradient background
+        self.bg_gradient = self._generate_gradient_surface()
+
         self.reset()
 
     def _make_overlays(self) -> None:
-        # Vignette low-res then scale
+        # Vignette low-res then scale (loop for compatibility)
         small_w, small_h = 320, int(320 * WINDOW_HEIGHT / WINDOW_WIDTH)
         s = pygame.Surface((small_w, small_h), pygame.SRCALPHA)
         cx, cy = small_w / 2.0, small_h / 2.0
@@ -69,6 +72,17 @@ class Game:
         # Soft drifting mist to add humidity and depth
         self.mist_tex = self._generate_mist_texture()
 
+    def _generate_gradient_surface(self) -> pygame.Surface:
+        """Precompute vertical gradient as a surface for fast blitting."""
+        surf = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+        # Use loop for compatibility if surfarray issues
+        for y in range(WINDOW_HEIGHT):
+            t = y / WINDOW_HEIGHT
+            r = int(COL_BG_TOP[0] * (1 - t) + COL_BG_BOTTOM[0] * t)
+            g = int(COL_BG_TOP[1] * (1 - t) + COL_BG_BOTTOM[1] * t)
+            b = int(COL_BG_TOP[2] * (1 - t) + COL_BG_BOTTOM[2] * t)
+            pygame.draw.line(surf, (r, g, b), (0, y), (WINDOW_WIDTH, y))
+        return surf
 
     def _build_parallax(self) -> None:
         # Describe layered ridge parameters for runtime generation (continuous silhouettes)
@@ -86,7 +100,7 @@ class Game:
             self.layers.append((color, speed, amp, freq, base_top, base_bot, step, phase))
 
     def _generate_rock_texture(self) -> pygame.Surface:
-        # Build a low-res greyscale multiplier texture and scale up
+        # Original loop for compatibility
         base_w, base_h = 320, int(320 * WINDOW_HEIGHT / WINDOW_WIDTH)
         tex = pygame.Surface((base_w, base_h))
 
@@ -111,7 +125,7 @@ class Game:
         return rock_mult
 
     def _generate_mist_texture(self) -> pygame.Surface:
-        # Low-res translucent texture with soft swirls
+        # Original loop for compatibility
         w, h = 320, int(320 * WINDOW_HEIGHT / WINDOW_WIDTH)
         s = pygame.Surface((w, h), pygame.SRCALPHA)
         for y in range(h):
@@ -165,7 +179,7 @@ class Game:
 
             # Update forward speed: apply drag each frame
             self.forward_speed -= self.forward_speed * FORWARD_DRAG * dt
-            # Clamp
+            # Clamp more aggressively
             self.forward_speed = max(0.0, min(self.forward_speed, FORWARD_THRUST + SCROLL_SPEED))
             # Integrate scroll offset based on current forward speed
             self.scroll_offset += self.forward_speed * dt
@@ -195,11 +209,14 @@ class Game:
             if self.bat.y - BAT_BODY_RADIUS <= 0 or self.bat.y + BAT_BODY_RADIUS >= WINDOW_HEIGHT:
                 self.trigger_game_over()
 
-            # Collisions with obstacles
+            # Collisions with obstacles (with distance culling)
             bat_r = BAT_BODY_RADIUS
             bat_cx = self.bat.x
             bat_cy = self.bat.y
+            cull_dist = 200.0  # Skip if obstacle is farther than this
             for obs in self.obstacles:
+                if abs(obs.x + OBSTACLE_WIDTH / 2 - bat_cx) > cull_dist:  # Center distance
+                    continue
                 # Precise circle-polygon collision against each spike poly
                 collided = False
                 for poly in obs.world_polys():
@@ -212,46 +229,53 @@ class Game:
                     top_tip = obs.get_top_tip_world()
                     if top_tip is not None:
                         tip_candidates.append(top_tip)
-                    bottom_tip = getattr(obs, "get_bottom_tip_world", None)
-                    if callable(bottom_tip):
-                        bt = bottom_tip()
-                        if bt is not None:
-                            tip_candidates.append(bt)
+                    bottom_tip = obs.get_bottom_tip_world()
+                    if bottom_tip is not None:
+                        tip_candidates.append(bottom_tip)
                     # Find closest tip to bat center
                     if tip_candidates:
                         tx, ty = min(
                             tip_candidates,
-                            key=lambda p: (p[0] - bat_cx) * (p[0] - bat_cx) + (p[1] - bat_cy) * (p[1] - bat_cy),
+                            key=lambda p: (p[0] - bat_cx)**2 + (p[1] - bat_cy)**2,
                         )
                         dx = tx - bat_cx
                         dy = ty - bat_cy
                         dist2 = dx * dx + dy * dy
-                        if dist2 <= (bat_r + 10) * (bat_r + 10):
+                        if dist2 <= (bat_r + 10)**2:
                             # Spawn a burst of blood droplets at the tip
                             for _ in range(22):
                                 self.blood.append(BloodDrop(tx, ty))
                     self.trigger_game_over()
                     break
 
-        # Update water drops
+        # Update water drops (with early culling)
         alive_drops: list[WaterDrop] = []
         for d in self.drops:
+            if d.x < -50 or d.x > WINDOW_WIDTH + 50:
+                d.alive = False
+                continue
             d.update(dt, self.obstacles, scroll_speed=self.forward_speed)
             if d.alive:
                 alive_drops.append(d)
         self.drops = alive_drops
 
-        # Update blood drops
+        # Update blood drops (with early culling)
         alive_blood: list[BloodDrop] = []
         for b in self.blood:
+            if b.x < -50 or b.x > WINDOW_WIDTH + 50:
+                b.alive = False
+                continue
             b.update(dt, self.obstacles, scroll_speed=self.forward_speed)
             if b.alive:
                 alive_blood.append(b)
         self.blood = alive_blood
 
-        # Update bat parts (they fall regardless of game over state)
+        # Update bat parts (with early culling)
         alive_parts: list[BatPart] = []
         for p in self.bat_parts:
+            if p.x < -60 or p.x > WINDOW_WIDTH + 60 or p.y > WINDOW_HEIGHT + 30:
+                p.alive = False
+                continue
             p.update(dt, scroll_speed=self.forward_speed)
             if p.alive:
                 alive_parts.append(p)
@@ -268,15 +292,18 @@ class Game:
             # Spawn bat parts exactly once on death
             self.bat_parts = self.bat.break_apart()
 
+    def perform_flap(self) -> None:
+        """Perform a flap: update bat velocity and add forward thrust."""
+        self.bat.flap()
+        self.forward_speed += FORWARD_THRUST
+
     def handle_input(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_SPACE, pygame.K_UP, pygame.K_w):
                 if self.game_over:
                     self.reset()
                 else:
-                    self.bat.flap()
-                    # Apply forward thrust on flap
-                    self.forward_speed += FORWARD_THRUST
+                    self.perform_flap()
             elif event.key in (pygame.K_r,):
                 self.reset()
             elif event.key in (pygame.K_ESCAPE,):
@@ -286,17 +313,11 @@ class Game:
                 if self.game_over:
                     self.reset()
                 else:
-                    self.bat.flap()
-                    self.forward_speed += FORWARD_THRUST
+                    self.perform_flap()
 
     def draw_background(self, surf: pygame.Surface) -> None:
-        # Vertical gradient
-        for y in range(0, WINDOW_HEIGHT, 4):
-            t = y / WINDOW_HEIGHT
-            r = int(COL_BG_TOP[0] * (1 - t) + COL_BG_BOTTOM[0] * t)
-            g = int(COL_BG_TOP[1] * (1 - t) + COL_BG_BOTTOM[1] * t)
-            b = int(COL_BG_TOP[2] * (1 - t) + COL_BG_BOTTOM[2] * t)
-            pygame.draw.rect(surf, (r, g, b), (0, y, WINDOW_WIDTH, 4))
+        # Use precomputed gradient
+        surf.blit(self.bg_gradient, (0, 0))
 
         # Parallax paper-cut cave silhouettes (continuous ridge, no striping)
         for color, speed, amp, freq, base_top, base_bot, step, phase in self.layers:
@@ -325,16 +346,15 @@ class Game:
         surf.blit(self.rock_mult, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
 
         # Add subtle drifting mist (two layers for variation)
-        if hasattr(self, "mist_tex"):
-            ox = int(-(self.scroll_offset * 0.15)) % self.mist_tex.get_width()
-            oy = int(math.sin(self.time_accum * 0.23) * 8)
-            # Tile horizontally to cover screen
-            for layer in (0.0, 0.35):
-                layer_ox = (ox + int(layer * 200)) % self.mist_tex.get_width()
-                dest1 = (-layer_ox, oy)
-                dest2 = (self.mist_tex.get_width() - layer_ox, oy)
-                surf.blit(self.mist_tex, dest1)
-                surf.blit(self.mist_tex, dest2)
+        ox = int(-(self.scroll_offset * 0.15)) % self.mist_tex.get_width()
+        oy = int(math.sin(self.time_accum * 0.23) * 8)
+        # Tile horizontally to cover screen
+        for layer in (0.0, 0.35):
+            layer_ox = (ox + int(layer * 200)) % self.mist_tex.get_width()
+            dest1 = (-layer_ox, oy)
+            dest2 = (self.mist_tex.get_width() - layer_ox, oy)
+            surf.blit(self.mist_tex, dest1)
+            surf.blit(self.mist_tex, dest2)
 
     def draw(self) -> None:
         self.draw_background(self.screen)

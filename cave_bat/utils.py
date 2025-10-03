@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 from typing import Sequence
+import numpy as np
+import pygame
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
@@ -111,3 +113,37 @@ def scale_color(color: tuple[int, int, int], factor: float) -> tuple[int, int, i
         int(clamp(g * factor, 0, 255)),
         int(clamp(b * factor, 0, 255)),
     )
+
+
+def procedural_noise_surface(w: int, h: int, noise_func: callable) -> np.ndarray:
+    """Generate a noise surface using NumPy meshgrid and a custom noise function.
+
+    Args:
+        w, h: Dimensions.
+        noise_func: Function taking X, Y meshgrids and returning noise values.
+
+    Returns:
+        RGB or RGBA array for surfarray.
+    """
+    x = np.linspace(0, 1, w, dtype=np.float32)
+    y = np.linspace(0, 1, h, dtype=np.float32)
+    X, Y = np.meshgrid(x, y)
+    v = noise_func(X, Y)
+    # Default to grayscale; subclasses can extend
+    c = np.clip(v * 255, 0, 255).astype(np.uint8)
+    return np.stack([c, c, c], axis=-1)
+
+
+def draw_offset_polygon(
+    surf: pygame.Surface,
+    poly: list[tuple[int, int]],
+    ox: int,
+    color: tuple[int, int, int],
+    width: int = 0,
+    shade_color: tuple[int, int, int] | None = None,
+) -> None:
+    """Draw a polygon with x-offset, supporting base fill and optional shade outline."""
+    world_poly = [(ox + px, py) for (px, py) in poly]
+    pygame.draw.polygon(surf, color, world_poly)
+    if shade_color:
+        pygame.draw.lines(surf, shade_color, True, world_poly, width or 2)

@@ -34,29 +34,51 @@ from .utils import circle_polygon_collision, clamp, scale_color
 from .config import BLOOD_COLOR
 
 
-class WaterDrop:
-    def __init__(self, x: float, y: float) -> None:
-        self.x = x + random.uniform(-2.0, 2.0)
+class Particle:
+    """Base class for particles with common physics and culling."""
+
+    def __init__(self, x: float, y: float, vx: float, vy: float) -> None:
+        self.x = x
         self.y = y
-        # Mostly vertical fall with slight lateral variation
-        self.vx = random.uniform(-8.0, 8.0)
-        self.vy = random.uniform(20.0, 60.0)
-        self.radius = 2.0
+        self.vx = vx
+        self.vy = vy
         self.alive = True
 
-    def update(self, dt: float, obstacles: list["Obstacle"], scroll_speed: float = 0.0) -> None:
+    def update_base(
+        self, dt: float, scroll_speed: float = 0.0, cull_left: float = -50.0, cull_right: float = None, cull_bottom: float = None
+    ) -> None:
+        """Common update: apply damping/gravity, integrate, cull offscreen."""
         if not self.alive:
             return
-        # Strong gravity, slight horizontal damping to avoid large sideways drift
-        self.vx *= (1.0 - min(0.6, 3.0 * dt))
-        self.vy += 1800.0 * dt
-        # Apply world scroll so drips fall vertically relative to cave
-        self.x += (self.vx - scroll_speed) * dt
-        self.y += self.vy * dt
-        if self.y > WINDOW_HEIGHT + 10:
+        # Early horizontal cull
+        if cull_right is None:
+            cull_right = WINDOW_WIDTH + 50
+        if self.x < cull_left or self.x > cull_right:
             self.alive = False
             return
-        # Die on impact with any spike polygon
+        # Default physics (override in subclasses)
+        self.vx *= (1.0 - min(0.4, 2.0 * dt))
+        self.vy += 2000.0 * dt
+        self.x += (self.vx - scroll_speed) * dt
+        self.y += self.vy * dt
+        # Vertical cull
+        if cull_bottom is not None and self.y > cull_bottom:
+            self.alive = False
+
+
+class WaterDrop(Particle):
+    def __init__(self, x: float, y: float) -> None:
+        super().__init__(x + random.uniform(-2.0, 2.0), y, random.uniform(-8.0, 8.0), random.uniform(20.0, 60.0))
+        self.radius = 2.0
+
+    def update(self, dt: float, obstacles: list["Obstacle"], scroll_speed: float = 0.0) -> None:
+        self.update_base(dt, scroll_speed, cull_bottom=WINDOW_HEIGHT + 10)
+        if not self.alive:
+            return
+        # Specific adjustments
+        self.vx *= (1.0 - min(0.6, 3.0 * dt))
+        self.vy += 1800.0 * dt
+        # Die on impact
         for obs in obstacles:
             for poly in obs.world_polys():
                 if circle_polygon_collision(self.x, self.y, self.radius, poly):
@@ -71,34 +93,23 @@ class WaterDrop:
         surf.blit(s, (int(self.x) - 4, int(self.y) - 4), special_flags=pygame.BLEND_PREMULTIPLIED)
 
 
-class BloodDrop:
+class BloodDrop(Particle):
     def __init__(self, x: float, y: float) -> None:
-        self.x = x + random.uniform(-1.5, 1.5)
-        self.y = y + random.uniform(-1.5, 1.5)
-        # Slight forward spray and random sideways
-        self.vx = random.uniform(-110.0, 140.0)
-        self.vy = random.uniform(-60.0, 80.0)
+        super().__init__(x + random.uniform(-1.5, 1.5), y + random.uniform(-1.5, 1.5),
+                         random.uniform(-110.0, 140.0), random.uniform(-60.0, 80.0))
         self.radius = random.uniform(1.5, 3.0)
-        self.alive = True
-        # Lifetime fade
         self.life = random.uniform(0.45, 0.8)
         self.age = 0.0
 
     def update(self, dt: float, obstacles: list["Obstacle"], scroll_speed: float = 0.0) -> None:
+        self.update_base(dt, scroll_speed, cull_bottom=WINDOW_HEIGHT + 10)
         if not self.alive:
             return
         self.age += dt
         if self.age >= self.life:
             self.alive = False
             return
-        # Gravity
         self.vy += 2400.0 * dt
-        # Apply world scroll so particles stay aligned with moving cave
-        self.x += (self.vx - scroll_speed) * dt
-        self.y += self.vy * dt
-        if self.y > WINDOW_HEIGHT + 10:
-            self.alive = False
-            return
         # Stop when hitting rock
         for obs in obstacles:
             for poly in obs.world_polys():
@@ -111,7 +122,6 @@ class BloodDrop:
             return
         d = int(max(2, self.radius * 2.0))
         s = pygame.Surface((d + 2, d + 2), pygame.SRCALPHA)
-        # Fade alpha over lifetime
         t = 1.0 - (self.age / max(0.0001, self.life))
         a = int(220 * t)
         pygame.draw.circle(s, (*BLOOD_COLOR, a), ((d + 2) // 2, (d + 2) // 2), int(self.radius))
@@ -119,11 +129,7 @@ class BloodDrop:
 
 
 class BatPart:
-    """A detachable bat body part with simple physics and its own renderer.
-
-    Coordinates are in world space. For polygon shapes, local_points are relative
-    to the part's origin (self.x, self.y). The part can rotate over time.
-    """
+    """A detachable bat body part with simple physics and its own renderer."""
 
     def __init__(
         self,
@@ -166,17 +172,21 @@ class BatPart:
         self.alive = True
 
     def update(self, dt: float, scroll_speed: float = 0.0) -> None:
+        # Use similar base logic
         if not self.alive:
             return
-        # Simple gravity and mild horizontal damping
+        cull_left = -60
+        cull_right = WINDOW_WIDTH + 60
+        cull_bottom = WINDOW_HEIGHT + 30
+        if self.x < cull_left or self.x > cull_right or self.y > cull_bottom:
+            self.alive = False
+            return
+        # Physics
         self.vx *= (1.0 - min(0.4, 2.0 * dt))
         self.vy += 2000.0 * dt
         self.x += (self.vx - scroll_speed) * dt
         self.y += self.vy * dt
         self.angle += self.angular_velocity * dt
-        # Kill when far off-screen
-        if self.y > WINDOW_HEIGHT + 30 or self.x < -60 or self.x > WINDOW_WIDTH + 60:
-            self.alive = False
 
     def draw(self, surf: pygame.Surface) -> None:
         if not self.alive:
@@ -676,15 +686,9 @@ class Obstacle:
     def draw(self, surf: pygame.Surface) -> None:
         ox = int(self.x)
 
-        def offset_poly(poly: list[tuple[int, int]]) -> list[tuple[int, int]]:
-            return [(ox + px, py) for (px, py) in poly]
-
         def draw_spike(poly: list[tuple[int, int]]) -> None:
-            world_poly = offset_poly(poly)
-            # Base fill
-            pygame.draw.polygon(surf, self.col_base, world_poly)
-            # Outline only (no bright side highlight)
-            pygame.draw.lines(surf, self.col_shade, True, world_poly, 2)
+            from .utils import draw_offset_polygon
+            draw_offset_polygon(surf, poly, ox, self.col_base, shade_color=self.col_shade)
 
         for sp in self._top_spikes:
             draw_spike(sp)
